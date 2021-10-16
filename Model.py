@@ -56,9 +56,10 @@ class Cifar(nn.Module):
                 # Construct the current batch.
                 # Don't forget to use "parse_record" to perform data preprocessing.
                 # Don't forget L2 weight decay
-
-                batch_curr_x_train = curr_x_train[i*bs:(i+1)*bs,:]
-                batch_curr_y_train = curr_y_train[i*bs:(i+1)*bs]
+                start = i*bs
+                end = (i+1) * bs
+                batch_curr_x_train = curr_x_train[start:end,:]
+                batch_curr_y_train = curr_y_train[start:end]
                 current_batch_pp = []
                 for j in range(self.config.batch_size):
                     current_batch_pp.append(parse_record(batch_curr_x_train[j],True))
@@ -97,7 +98,7 @@ class Cifar(nn.Module):
                 img_input = np.array([img_pp])
                 x_test_tensor = torch.FloatTensor(img_input)
                 pred = self.network(x_test_tensor)
-                pred = torch.max(pred,1)
+                _,pred = torch.max(pred,1)
                 preds.append(pred)
             
             ### END CODE HERE

@@ -74,10 +74,9 @@ class ResNet(nn.Module):
         self.stack_layers = nn.ModuleList()
         filters = self.first_num_filters 
         for i in range(3):
-            input_filters = filters
             filters = self.first_num_filters * (2**i)
             strides = 1 if i == 0 else 2
-            self.stack_layers.append(stack_layer(filters, block_fn, strides, self.resnet_size, input_filters))
+            self.stack_layers.append(stack_layer(filters, block_fn, strides, self.resnet_size, self.first_num_filters))
         self.output_layer = output_layer(filters*4, self.resnet_version, self.num_classes)
     
     def forward(self, inputs):
@@ -190,12 +189,15 @@ class bottleneck_block(nn.Module):
         self.second_layer = nn.Conv2d(filters,filters,3,padding=1)
         self.third_layer = nn.Conv2d(filters,filters*4,1,padding=0)
         self.residual_projection = None
+        self.bnrelu_first = batch_norm_relu_layer(filters*4)
+        self.bnrelu_rest = batch_norm_relu_layer(filters)
 
         if projection_shortcut is not None:
             self.residual_projection = nn.Conv2d(first_num_filters,filters*4,1,stride = strides)
             self.first_layer = nn.Conv2d(first_num_filters,filters,1, stride = strides)
+            self.bnrelu_first = batch_norm_relu_layer(first_num_filters)
         
-        self.bnrelu = batch_norm_relu_layer(filters)
+        
 
         ### YOUR CODE HERE
         # Hint: Different from standard lib implementation, you need pay attention to 
@@ -208,13 +210,17 @@ class bottleneck_block(nn.Module):
         ### YOUR CODE HERE
         # The projection shortcut should come after the first batch norm and ReLU
 		# since it performs a 1x1 convolution.
-        preact_l1 = self.bnrelu(inputs)
+        preact_l1 = self.bnrelu_first(inputs)
         out_l1 = self.first_layer(preact_l1)
-        preact_l2 = self.bnrelu(out_l1)
+        preact_l2 = self.bnrelu_rest(out_l1)
         out_l2 = self.second_layer(preact_l2)
-        preact_l3 = self.bnrelu(out_l2)
+        preact_l3 = self.bnrelu_rest(out_l2)
         out_l3 = self.third_layer(preact_l3)
-        res_out = out_l3 + preact_l3
+        if(self.residual_projection is not None):
+            res_proj = self.residual_projection(preact_l1)
+        else:
+            res_proj = preact_l1
+        res_out = out_l3 + res_proj
         out = F.relu(res_out)
 
         return out
@@ -240,24 +246,28 @@ class stack_layer(nn.Module):
         ### END CODE HERE
         # projection_shortcut = ?
         # Only the first block per stack_layer uses projection_shortcut and strides
-
-        if(block_fn.__name__ == 'standard_block'):
-            self.resnet_size = resnet_size
-            self.first_block = standard_block(filters,1,strides,first_num_filters)
-            self.rest_blocks = standard_block(filters,None,strides,first_num_filters)
-        elif(block_fn.__name__ == 'bottleneck_block'):
-            self.resnet_size = resnet_size
-            self.first_block = bottleneck_block(filters,1,strides,first_num_filters)
-            self.rest_blocks = bottleneck_block(filters,None,strides,first_num_filters)
+        blocks = []
+        for i in range(resnet_size):
+            if(block_fn.__name__ == 'standard_block'):
+                if(i==0):
+                    if(filters != first_num_filters):
+                        blocks.append(standard_block(filters,1,strides,filters//2))
+                    else:
+                        blocks.append(standard_block(filters,None,strides,first_num_filters))
+                else:
+                    blocks.append(standard_block(filters,None,1,filters))
+                #blocks.append(standard_block(filters,None,strides,first_num_filters))
+            elif(block_fn.__name__ == 'bottleneck_block'):
+                blocks.append(bottleneck_block(filters,1,strides,first_num_filters))
+                blocks.append(bottleneck_block(filters,None,strides,first_num_filters))
+        self.blocks = nn.Sequential(*blocks)
 
         ### END CODE HERE
     
     def forward(self, inputs: Tensor) -> Tensor:
         ### END CODE HERE
-        blocks = self.first_block(inputs)
-        for i in range(self.resnet_size-1):
-            blocks = self.rest_blocks(blocks)
-        return blocks
+        out = self.blocks(inputs)
+        return out
 
         ### END CODE HERE
 
@@ -280,12 +290,14 @@ class output_layer(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d((1,1))
         input_filters = int(filters/4)
         self.fully_conn = nn.Linear(input_filters,num_classes)
+        #self.sm = nn.Softmax(dim=1)
         ### END CODE HERE
     
     def forward(self, inputs: Tensor) -> Tensor:
         ### END CODE HERE
         pool_out = self.avg_pool(inputs)
         flat_out = pool_out.view(pool_out.size(0),-1)
-        out = self.fully_conn(flat_out)
-        return out
+        out_fc = self.fully_conn(flat_out)
+        #out = self.sm(out_fc)
+        return out_fc
         ### END CODE HERE
